@@ -199,4 +199,62 @@ In case of:
 -  _Outside the cluster_ run, the user must set the `LOG_LEVEL` field and manually restart the operator.
 
 
-# Device 
+## Enabling access to host devices in workloads
+
+It is possible to access a mounted host device from a workload running in the device simply by adding a specific `crun` annotation `run.oci.keep_original_groups=1` and granting access rights to the `flotta` user in the host device. By default, Flotta devices come pre-installed with the crun continer runtime and workloads run in a rootless mode for enhanced security. This container runtime allows sharing the running user's group IDs with the container's user, so that it enables containers to access host resources with the same IDs as the running host user. But before a container can access these resources, the user's host needs to have access in the first place. This is by no means an escalation of privileges, since the container is granted only as much access as the host user has. This is an example of the annotation used in an EdgeWorkload manifest. Flotta propagates annotations and labels in EdgeWorkloads to the pod manifests running in the devices when they are prefixed with `podman/`. When processing the labels and annotations, Flotta removes the prefix and passes only the remaining contents of the key and the given value to the pod manifest:
+
+```yaml
+apiVersion: management.project-flotta.io/v1alpha1
+kind: EdgeWorkload
+metadata:
+  name: webcam
+  annotations:
+    podman/run.oci.keep_original_groups: "1"
+...
+```
+
+Granting access from the host device is simply done by adding the suplementary group to the `flotta` user. For instance, given a device that has a webcam mounted in `/dev/video2` and has the group `video` with read and write access like the following:
+
+```bash
+[flotta@device ~]$ ls -la /dev/video2
+crw-rw----+ 1 root video 81, 2 Jul  6 09:16 /dev/video2
+```
+
+A container can have access to it if the `flotta` user has the supplementary user group `video`:
+
+```bash
+[flotta@device ~]$ id
+uid=1001(flotta) gid=1001(flotta) groups=1001(flotta),39(video) context=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+```
+
+Running this workload will allow the container to access read and write to the `/dev/video2` device in the host:
+
+```yaml
+apiVersion: management.project-flotta.io/v1alpha1
+kind: EdgeWorkload
+metadata:
+  name: webcam
+  annotations:
+    podman/run.oci.keep_original_groups: "1"
+spec:
+  deviceSelector:
+    matchLabels:
+      app: webcam
+  type: pod
+  pod:
+    spec:
+      containers:
+      - command:
+        - /bin/sh 
+        args:
+        - script.sh
+        image: quay.io/jordigilh/ffmpeg:latest
+        name: fedora
+        volumeMounts:
+        - mountPath: /dev/video2
+          name: video
+      volumes:
+      - name: video 
+        hostPath:
+        path: /dev/video2
+```
