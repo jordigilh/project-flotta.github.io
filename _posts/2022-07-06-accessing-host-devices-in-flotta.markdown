@@ -18,6 +18,7 @@ In today's container security, it is important to reduce the risk of a security 
 Rootless containers also limit the access to the host devices by default, as it depends on the privileges of the runtime user access. In Flotta we create the user `flotta` as part of the flotta rpm installation and run the workloads with that user. By default the flotta user does not have access to any plugged device so if there is a need two things to happen to enable a workload to access a mounted device:
 * Modify the `flotta` user to include the supplementary group assigned to the device.
 * Instruct `crun` to keep the running user's groups in the container.
+* Disable SELinux in podman due to labeling issues between the container and the device.
 
 ## Configuing the host ##
 
@@ -61,6 +62,16 @@ frame=    1 fps=0.5 q=1.6 Lsize=N/A time=00:00:00.03 bitrate=N/A speed=0.0166x
 video:4kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown
 ```
 
+Configure podman to disable SELinux on all rootless containers:
+
+```bash
+[flotta@fedora ~]$ mkdir -p ~/.config/containers
+[flotta@fedora ~]$ cat <<EOF >>.config/containers/containers.conf 
+[containers]
+label = false
+EOF
+```
+
 ## Defining the workload ##
 At this step we have ensured that `flotta` as a user in the host has access to the webcam. Now we need to guarantee that the container is also able to share the same privileges. To that we will leverage on the annotation `run.oci.keep_original_groups=1`, supported by the `crun` container runtime, that allows containers to inherit the running user's groups. We inject the annotation in the EdgeWorkload with prefix `podman/` so that the Flotta operator knows that it needs to be propagated it is included as part of the pod's manifest on the agent side. 
 
@@ -96,6 +107,19 @@ spec:
 
 In this example we are mounting the host device `/dev/video2` to the container's equivalent `/dev/video2`. The image we use here is a vanilla fedora with ffmpeg-free rpm installed and the script run will execute the ffmpeg command we run earlier and store the jpeg in `/tmp/helloworld.jpg`.
 
+Here is the contents of the script:
+
+```bash
+#!/bin/sh
+
+for i in {1..10}; do
+  echo Taking snapshot
+  /usr/bin/ffmpeg -f video4linux2 -s 640x480 -i /dev/video2 -ss 0:0:2 -frames 1 /tmp/helloworld-$i.jpg
+  echo Sleeping 10 seconds
+  /usr/bin/sleep 10
+done
+```
+
 ## Running the workload ##
 
 At this point, we are ready to deploy the workload on the device. For this example, I have created a VM running fedora and configured it as a I have labeled my edge device with `webcam` to make sure that the Flotta controller schedules the workload on this specific device.
@@ -104,8 +128,31 @@ At this point, we are ready to deploy the workload on the device. For this examp
 [jgil@fedora ~]$ kubectl create -f workload_webcam.yaml
 ```
 
+Since I'm running this on a VM, I'm going to ssh to the device and become the `flotta` user to access the container and see that the images were created:
+
+```bash
+[jgil@fedora ~] ssh -l root 192.168.122.23
+[root@device ~] su -l flotta -s /bin/bash
+[flotta@device ~] podman exec -it webcam-fedora ls -lart /tmp
+total 56
+dr-xr-xr-x. 1 root root   24 Jul 14 21:44 ..
+-rw-r--r--. 1 root root 3740 Jul 14 21:44 helloworld-1.jpg
+-rw-r--r--. 1 root root 3456 Jul 14 21:45 helloworld-2.jpg
+-rw-r--r--. 1 root root 3875 Jul 14 21:45 helloworld-3.jpg
+-rw-r--r--. 1 root root 3832 Jul 14 21:45 helloworld-4.jpg
+-rw-r--r--. 1 root root 3891 Jul 14 21:46 helloworld-5.jpg
+-rw-r--r--. 1 root root 3805 Jul 14 21:46 helloworld-6.jpg
+-rw-r--r--. 1 root root 4298 Jul 14 21:46 helloworld-7.jpg
+-rw-r--r--. 1 root root 4824 Jul 14 21:46 helloworld-8.jpg
+-rw-r--r--. 1 root root 4843 Jul 14 21:47 helloworld-9.jpg
+-rw-r--r--. 1 root root 4718 Jul 14 21:47 helloworld-10.jpg
+drwxrwxrwt. 1 root root  322 Jul 14 21:47 .
+```
+
+As an exercise, you can enhance this example by adding a data sync path to upload the images to a remote S3 storage using the data transfer capabilities of the Flotta agent. This way you won't need to sneak into the VM like I did to see that the images were created. 
+
 ## Conclusion ##
 
 Flotta is gradually improving the support of workloads that can run on devices without compromising the security of the device. With Flotta it is possible to run workloads that generate and consume data and are capable of synchronizing with a remote compatible S3 storage, as well as workloads that require access to the host mounted devices, such as webcams or sensors.
 
-As an exercise, you can enhance this example by creating a loop that wakes every 10 seconds and stores a new image in a data sync path, where it will be uploaded to a remote S3 storage using the data transfer capabilities of the Flotta agent. Remember to clean up the images from time to time or you will run out of storage.
+There is still room for improvement in the usability and security aspect of accessing host devices, which we hope to improve in the near future. Feel free to drop suggestions or enhancements to the [project](https://github.com/project-flotta/) in the github repository!.

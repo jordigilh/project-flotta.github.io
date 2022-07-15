@@ -201,7 +201,12 @@ In case of:
 
 ## Enabling access to host devices in workloads
 
-It is possible to access a mounted host device from a workload running in the device simply by adding a specific `crun` annotation `run.oci.keep_original_groups=1` and granting access rights to the `flotta` user in the host device. By default, Flotta devices come pre-installed with the crun continer runtime and workloads run in a rootless mode for enhanced security. This container runtime allows sharing the running user's group IDs with the container's user, so that it enables containers to access host resources with the same IDs as the running host user. But before a container can access these resources, the user's host needs to have access in the first place. This is by no means an escalation of privileges, since the container is granted only as much access as the host user has. This is an example of the annotation used in an EdgeWorkload manifest. Flotta propagates annotations and labels in EdgeWorkloads to the pod manifests running in the devices when they are prefixed with `podman/`. When processing the labels and annotations, Flotta removes the prefix and passes only the remaining contents of the key and the given value to the pod manifest:
+It is possible to access a mounted host device from a workload running in the device simply by following these 3 changes:
+* Add the annotation `run.oci.keep_original_groups=1` to [containers.conf](https://github.com/containers/podman/blob/791458605af79e17e12a5a56fff30742ea0ff310/test/e2e/config/containers.conf#L56). This annotation uses the same groupID from the user's host in the container. 
+* Add the device's group to flotta's user as a supplementary group
+* Disable SELinux in the host due to labeling mismatch. 
+ 
+ By default, Flotta devices run workloads using the crun continer runtime in a rootless mode for enhanced security. This container runtime allows sharing the running user's group IDs with the container's user, so that it enables containers to access host resources with the same IDs as the running host user. But before a container can access these resources, the user's host needs to have access in the first place. This is by no means an escalation of privileges, since the container is granted only as much access as the host user has. This is an example of the annotation used in an EdgeWorkload manifest. Flotta propagates annotations and labels in EdgeWorkloads to the pod manifests running in the devices when they are prefixed with `podman/`. When processing the labels and annotations, Flotta removes the prefix and passes only the remaining contents of the key and the given value to the pod manifest:
 
 ```yaml
 apiVersion: management.project-flotta.io/v1alpha1
@@ -225,6 +230,16 @@ A container can have access to it if the `flotta` user has the supplementary use
 ```bash
 [flotta@device ~]$ id
 uid=1001(flotta) gid=1001(flotta) groups=1001(flotta),39(video) context=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+```
+
+Disabling SELinux in podman will remove the labeling issues between the container and the device:
+
+```bash
+[flotta@fedora ~]$ mkdir -p ~/.config/containers
+[flotta@fedora ~]$ cat <<EOF >>.config/containers/containers.conf 
+[containers]
+label = false
+EOF
 ```
 
 Running this workload will allow the container to access read and write to the `/dev/video2` device in the host:
